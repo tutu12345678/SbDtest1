@@ -1,0 +1,39 @@
+name: Secure by Design Assessment Automation
+
+# Runs hourly by default. Change the cron expression to "0 6 * * *" for a
+# once-daily run at 06:00 UTC instead, if hourly is more than you need.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
+
+# Least-privilege token permissions for this workflow.
+permissions:
+  contents: read
+
+jobs:
+  create-assessment-tickets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir requests
+
+      - name: Run Secure by Design ticket automation
+        env:
+          ADO_ORG_URL: ${{ secrets.ADO_ORG_URL }}
+          ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          # Scoped to one POD for the dry run. Remove this line later if/when
+          # you want the automation to cover the whole project.
+          ADO_AREA_PATH: ${{ secrets.ADO_AREA_PATH }}
+        run: python create_assessment_tickets.py
