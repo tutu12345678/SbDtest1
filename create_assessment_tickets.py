@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 create_assessment_tickets.py
 
@@ -596,6 +596,16 @@ def create_assessment_ticket(
                 f"{ASSESSMENT_TITLE_PREFIX}"
                 f"{story_title}"
             ),
+        },
+        {
+            "op": "add",
+            "path": "/fields/System.AreaPath",
+            "value": ADO_AREA_PATH,
+        },
+        {
+            "op": "add",
+            "path": "/fields/System.IterationPath",
+            "value": ADO_ITERATION_PATH,
         },
         {
             "op": "add",
