@@ -42,6 +42,10 @@ jobs:
           # Scoped to one POD for the dry run. Remove this line later if/when
           # you want the automation to cover the whole project.
           ADO_AREA_PATH: ${{ secrets.ADO_AREA_PATH }}
+          # Required. This is what defines "this month" for the script now —
+          # update the secret value each month, e.g. to
+          # ADI\CDQ-iPAL_PowerApps\2026\Y26-Nov once November starts.
+          ADO_ITERATION_PATH: ${{ secrets.ADO_ITERATION_PATH }}
           # Manual runs (Actions tab -> Run workflow) use the checkbox above,
           # defaulting to true. Scheduled hourly runs always use the "true"
           # fallback here too, so the schedule stays a no-op dry run until
