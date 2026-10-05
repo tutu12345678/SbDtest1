@@ -3,19 +3,61 @@
 Automatically creates a linked "Secure by Design Assessment" work item in
 Azure DevOps for every new User Story, so nobody has to do it by hand.
 
+## Built-in safety behavior
+
+Two things keep this from making a mess on the client board before you're
+ready:
+
+1. **Dry run by default.** `DRY_RUN` defaults to `true`. In dry-run mode the
+   script does a real read-only scan of Azure DevOps and logs exactly what
+   it *would* create (story IDs, assignee, would-create vs. would-skip) —
+   but makes zero write calls. Nothing gets created in ADO until you
+   explicitly set `DRY_RUN=false`.
+2. **Current-month floor.** The scan window never reaches earlier than the
+   first moment of the current calendar month (UTC), no matter what
+   `LOOKBACK_HOURS` is set to. This is a hard safety floor, not just a
+   lookback setting — a misconfigured lookback value can't accidentally pull
+   in stories from previous months.
+
 ## How it works
 
 1. A GitHub Actions workflow runs on a schedule (hourly by default).
 2. `create_assessment_tickets.py` queries Azure DevOps for User Stories
-   created in the last ~26 hours (a bit over the run interval, so a missed
-   or delayed run can't silently skip a story).
+   created since `max(start of current month, now - LOOKBACK_HOURS)`.
 3. For each story, it checks the story's **Related** links for an existing
    `Secure by Design Assessment` work item. If one exists, it's skipped.
-4. If none exists, it creates one titled `SbD_<Story Title>`, tags it `SbD`,
-   copies the assignee from the story (unless `DEFAULT_ASSIGNEE` is set),
-   and links it back to the story with a **Related** link.
+4. If none exists **and** `DRY_RUN` is false, it creates one titled
+   `SbD_<Story Title>`, tags it `SbD`, copies the assignee from the story
+   (unless `DEFAULT_ASSIGNEE` is set), and links it back to the story with a
+   **Related** link. If `DRY_RUN` is true, it just logs the decision.
 5. Only work item IDs and HTTP status codes are logged — never story titles
-   or descriptions.
+   or descriptions, unless you explicitly opt into
+   `DRY_RUN_SHOW_TITLES=true` for manual review during a dry run.
+
+## Doing the dry run (do this first)
+
+1. Push the code to the repo with the workflow's `DRY_RUN` left at its
+   default (`true`).
+2. Go to the repo's **Actions** tab → the workflow → **Run workflow**
+   (this is the `workflow_dispatch` trigger — it has a `dry_run` checkbox,
+   ticked by default).
+3. Open the completed run's log. You'll see a scope summary line
+   (project, area path, date range, dry-run status) followed by one line per
+   story: either "already has an assessment ticket, skipping" or
+   "[DRY-RUN] would create assessment ticket for story &lt;id&gt;".
+4. Cross-check a few of those story IDs in Azure DevOps yourself to confirm
+   they're in the right project/POD and really do need an assessment ticket.
+5. If you want to see the *titles* the script would use (to sanity-check the
+   `SbD_` naming) without creating anything, re-run manually with
+   `DRY_RUN_SHOW_TITLES=true` set as an extra env var on that one run.
+6. Only once you're confident in the output: edit the workflow's `DRY_RUN`
+   line (see below) to `false`, or untick the dry-run box on a manual run,
+   so the **next** scheduled run actually creates tickets.
+
+**Important:** the scheduled (cron) trigger always falls back to dry-run
+`true` unless you edit the `DRY_RUN:` line in `automate_tickets.yml`
+directly — the workflow_dispatch checkbox only affects manual runs. So the
+hourly schedule stays a safe no-op until you deliberately flip that line.
 
 ## One-time setup
 
@@ -37,23 +79,25 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 | `ADO_ORG_URL`  | `https://dev.azure.com/nestle-it`       |
 | `ADO_PROJECT`  | `ADI`                                   |
 | `ADO_PAT`      | *(the token from step 1 — paste once, never logged)* |
+| `ADO_AREA_PATH`| `ADI\CDQ-iPAL_PowerApps` *(dry-run scope)* |
 
-To find your org URL and project name: open the relevant board in Azure
-DevOps in your browser — the address bar shows
-`https://dev.azure.com/{org}/{project}/_boards/...`.
-
-### 3. (Optional) Scope to one Area Path / POD
-
-If a repo/workflow should only handle one POD, set the `ADO_AREA_PATH`
-environment variable in the workflow file (see the commented-out line in
-`automate_tickets.yml`) to something like `ADI\CDQ-iPAL_PowerApps`. Leave it
-unset to scan the whole project.
-
-### 4. Confirm the schedule
+### 3. Confirm the schedule
 
 The workflow runs hourly (`0 * * * *`). To switch to once a day, edit the
-`cron` line in `.github/workflows/automate_tickets.yml` — e.g. `0 6 * * *`
-runs once daily at 06:00 UTC.
+`cron` line — e.g. `0 6 * * *` runs once daily at 06:00 UTC.
+
+## Turning it on for real
+
+Once the dry run looks correct:
+
+1. Open `.github/workflows/automate_tickets.yml`.
+2. Change the line `DRY_RUN: ${{ inputs.dry_run != false }}` to
+   `DRY_RUN: "false"`.
+3. Commit. The next scheduled run will create real tickets.
+
+Keep the `ADO_AREA_PATH` secret scoped to one POD for as long as you want
+this limited to a single team, and widen or remove it when you're ready to
+cover the whole project.
 
 ## Scaling to other PODs
 
@@ -66,15 +110,6 @@ Two options, both supported by the same script:
   beyond the secrets and optional area path, another team can plug into this
   exact same script with only their own secrets configured.
 
-## Doing a dry run first
-
-Before turning on the schedule, run it once manually with
-`workflow_dispatch` (the "Run workflow" button on the Actions tab) against a
-project/Area Path with only a couple of test User Stories, and check the
-Actions log output — you'll see ticket IDs and status codes, and you can
-verify in Azure DevOps that the created ticket looks right before it runs
-unattended across all 50-60 stories a month.
-
 ## Config reference (environment variables)
 
 | Variable | Required | Default | Purpose |
@@ -82,8 +117,10 @@ unattended across all 50-60 stories a month.
 | `ADO_ORG_URL` | Yes | — | e.g. `https://dev.azure.com/nestle-it` |
 | `ADO_PROJECT` | Yes | — | e.g. `ADI` |
 | `ADO_PAT` | Yes | — | PAT with Work Items Read & Write scope |
+| `DRY_RUN` | No | `true` | Set to `false` to let the script actually create tickets |
+| `DRY_RUN_SHOW_TITLES` | No | `false` | Include would-be titles in dry-run logs for manual review |
 | `ADO_AREA_PATH` | No | *(whole project)* | Restrict scan to one Area Path |
-| `LOOKBACK_HOURS` | No | `26` | How far back to scan for new stories |
+| `LOOKBACK_HOURS` | No | `26` | How far back to scan; never earlier than start of current month |
 | `ASSESSMENT_WORK_ITEM_TYPE` | No | `Secure by Design Assessment` | Custom work item type name |
 | `ASSESSMENT_TAG` | No | `SbD` | Tag applied to the new ticket |
 | `ASSESSMENT_TITLE_PREFIX` | No | `SbD_` | Prefix for the assessment title |
