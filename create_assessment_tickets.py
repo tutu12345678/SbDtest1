@@ -7,16 +7,23 @@ a linked "Secure by Design Assessment" work item. Creates the assessment
 ticket if it doesn't already exist, and links it back to the parent story
 with a "Related" link.
 
+Scoping:
+  - Scope is purely by Iteration Path (ADO_ITERATION_PATH, required) and,
+    optionally, Area Path — the same two fields you'd fill in on a manual
+    ADO query. There is no date-based filtering at all: every run scans
+    every User Story in that iteration, and the duplicate check in step 2
+    means stories that already have an assessment ticket are just skipped.
+    This makes the script safe to re-run repeatedly against the same
+    iteration (e.g. "ADI\\CDQ-iPAL_PowerApps\\2026\\Y26-Oct") as the month
+    progresses — it only ever creates tickets for stories that don't have
+    one yet.
+
 Safety behavior:
   - DRY_RUN defaults to "true". In dry-run mode, the script logs exactly what
     it WOULD do (story IDs and would-create/would-skip decisions) but makes
     no write calls to Azure DevOps at all. You must explicitly set
     DRY_RUN=false to let it actually create tickets.
-  - The scan window never reaches earlier than the start of the current
-    calendar month (UTC), regardless of LOOKBACK_HOURS. This is a hard floor
-    so a misconfigured lookback can't accidentally pull in stories from
-    previous months.
-  - Every run logs a scope summary (project, area path, month boundary,
+  - Every run logs a scope summary (project, area path, iteration path,
     dry-run status) before touching anything, so you can see exactly what
     it's about to act on.
 
@@ -30,9 +37,11 @@ Security notes:
     Azure DevOps server-side).
 
 Required environment variables:
-  ADO_ORG_URL      e.g. https://dev.azure.com/nestle-it
-  ADO_PROJECT      e.g. ADI
-  ADO_PAT          Personal Access Token with "Work Items (Read & Write)" scope
+  ADO_ORG_URL         e.g. https://dev.azure.com/nestle-it
+  ADO_PROJECT         e.g. ADI
+  ADO_PAT             Personal Access Token with "Work Items (Read & Write)" scope
+  ADO_ITERATION_PATH  e.g. ADI\\CDQ-iPAL_PowerApps\\2026\\Y26-Oct
+                       Update this each month to point at that month's iteration.
 
 Optional environment variables (safe defaults shown):
   DRY_RUN                 Default: "true". Set to "false" to actually create tickets.
@@ -40,9 +49,7 @@ Optional environment variables (safe defaults shown):
                            the would-be assessment title, for manual review.
                            Leave false to keep logs title-free as originally required.
   ADO_AREA_PATH            Restrict scan to a specific Area Path (e.g. "ADI\\CDQ-iPAL_PowerApps").
-                           Leave unset to scan the whole project.
-  LOOKBACK_HOURS           How far back to scan for new User Stories. Default: 26.
-                           Never goes earlier than the start of the current month.
+                           Leave unset to scan the whole project (still scoped by iteration).
   ASSESSMENT_WORK_ITEM_TYPE  Default: "Secure by Design Assessment"
   ASSESSMENT_TAG           Default: "SbD"
   ASSESSMENT_TITLE_PREFIX  Default: "SbD_"
@@ -52,7 +59,6 @@ Optional environment variables (safe defaults shown):
 import logging
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -65,11 +71,11 @@ ADO_ORG_URL = os.environ.get("ADO_ORG_URL", "").rstrip("/")
 ADO_PROJECT = os.environ.get("ADO_PROJECT", "")
 ADO_PAT = os.environ.get("ADO_PAT", "")
 ADO_AREA_PATH = os.environ.get("ADO_AREA_PATH", "").strip()
+ADO_ITERATION_PATH = os.environ.get("ADO_ITERATION_PATH", "").strip()
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
 DRY_RUN_SHOW_TITLES = os.environ.get("DRY_RUN_SHOW_TITLES", "false").strip().lower() == "true"
 
-LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "26"))
 ASSESSMENT_WORK_ITEM_TYPE = os.environ.get(
     "ASSESSMENT_WORK_ITEM_TYPE", "Secure by Design Assessment"
 )
@@ -100,6 +106,7 @@ def fail_fast_on_missing_config():
             ("ADO_ORG_URL", ADO_ORG_URL),
             ("ADO_PROJECT", ADO_PROJECT),
             ("ADO_PAT", ADO_PAT),
+            ("ADO_ITERATION_PATH", ADO_ITERATION_PATH),
         )
         if not val
     ]
@@ -116,26 +123,17 @@ def ado_session() -> requests.Session:
     return session
 
 
-def current_month_start_utc() -> datetime:
-    now = datetime.now(timezone.utc)
-    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
 # ---------------------------------------------------------------------------
-# Step 1: find recently created User Stories
+# Step 1: find User Stories in the target iteration (month)
 # ---------------------------------------------------------------------------
 
-def get_recent_user_stories(session: requests.Session) -> list[int]:
-    """Returns a list of work item IDs for User Stories created since
-    max(start-of-current-month, now - LOOKBACK_HOURS). The month boundary is
-    a hard floor: even a very large LOOKBACK_HOURS can never reach back into
-    a previous month."""
-    now = datetime.now(timezone.utc)
-    lookback_floor = now - timedelta(hours=LOOKBACK_HOURS)
-    month_floor = current_month_start_utc()
-    since = max(lookback_floor, month_floor)
-    since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
-
+def get_user_stories_in_iteration(session: requests.Session) -> list[int]:
+    """Returns every User Story under ADO_ITERATION_PATH (and, if set,
+    ADO_AREA_PATH). No date filtering at all — scope is purely "which
+    iteration/sprint", since that's how the team actually defines "this
+    month's work" rather than a raw creation timestamp. Re-running this for
+    the same iteration is safe: the duplicate check in step 2 means stories
+    that already have an assessment ticket are simply skipped."""
     area_clause = ""
     if ADO_AREA_PATH:
         # WIQL uses UNDER for area path scoping so sub-areas are included too.
@@ -147,26 +145,23 @@ def get_recent_user_stories(session: requests.Session) -> list[int]:
             FROM WorkItems
             WHERE [System.TeamProject] = '{ADO_PROJECT}'
             AND [System.WorkItemType] = 'User Story'
-            AND [System.CreatedDate] >= '{since_str}'
+            AND [System.IterationPath] UNDER '{ADO_ITERATION_PATH}'
             {area_clause}
             ORDER BY [System.CreatedDate] ASC
         """
     }
 
     log.info(
-        "Scope for this run: project=%s area_path=%s since=%s "
-        "(month_floor=%s lookback_floor=%s) dry_run=%s",
+        "Scope for this run: project=%s area_path=%s iteration_path=%s dry_run=%s",
         ADO_PROJECT,
         ADO_AREA_PATH or "(entire project)",
-        since_str,
-        month_floor.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        lookback_floor.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ADO_ITERATION_PATH,
         DRY_RUN,
     )
 
     url = f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/wiql?api-version={API_VERSION}"
     resp = session.post(url, json=wiql, timeout=REQUEST_TIMEOUT_SECS)
-    log.info("WIQL query for recent User Stories -> status %s", resp.status_code)
+    log.info("WIQL query for User Stories in iteration -> status %s", resp.status_code)
     resp.raise_for_status()
 
     work_items = resp.json().get("workItems", [])
@@ -335,7 +330,7 @@ def main():
             "Set DRY_RUN=false to let this run create real tickets."
         )
 
-    story_ids = get_recent_user_stories(session)
+    story_ids = get_user_stories_in_iteration(session)
     created_count = 0
     skipped_count = 0
     error_count = 0
