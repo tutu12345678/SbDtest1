@@ -7,11 +7,25 @@ a linked "Secure by Design Assessment" work item. Creates the assessment
 ticket if it doesn't already exist, and links it back to the parent story
 with a "Related" link.
 
+Safety behavior:
+  - DRY_RUN defaults to "true". In dry-run mode, the script logs exactly what
+    it WOULD do (story IDs and would-create/would-skip decisions) but makes
+    no write calls to Azure DevOps at all. You must explicitly set
+    DRY_RUN=false to let it actually create tickets.
+  - The scan window never reaches earlier than the start of the current
+    calendar month (UTC), regardless of LOOKBACK_HOURS. This is a hard floor
+    so a misconfigured lookback can't accidentally pull in stories from
+    previous months.
+  - Every run logs a scope summary (project, area path, month boundary,
+    dry-run status) before touching anything, so you can see exactly what
+    it's about to act on.
+
 Security notes:
   - The PAT is read from an environment variable only (GitHub Secret). It is
     never printed, logged, or written to disk.
   - Logging is restricted to work item IDs and HTTP status codes. Story
-    titles/descriptions are never written to logs.
+    titles/descriptions are never written to logs, unless you explicitly opt
+    in with DRY_RUN_SHOW_TITLES=true for manual dry-run verification.
   - All requests go over HTTPS to dev.azure.com (TLS 1.2+ is enforced by
     Azure DevOps server-side).
 
@@ -21,14 +35,18 @@ Required environment variables:
   ADO_PAT          Personal Access Token with "Work Items (Read & Write)" scope
 
 Optional environment variables (safe defaults shown):
-  ADO_AREA_PATH           Restrict scan to a specific Area Path (e.g. "ADI\\CDQ-iPAL_PowerApps").
-                          Leave unset to scan the whole project.
-  LOOKBACK_HOURS          How far back to scan for new User Stories. Default: 26
-                          (slightly over 24h/daily-run to cover any workflow delay/skip).
+  DRY_RUN                 Default: "true". Set to "false" to actually create tickets.
+  DRY_RUN_SHOW_TITLES     Default: "false". If true, dry-run log lines include
+                           the would-be assessment title, for manual review.
+                           Leave false to keep logs title-free as originally required.
+  ADO_AREA_PATH            Restrict scan to a specific Area Path (e.g. "ADI\\CDQ-iPAL_PowerApps").
+                           Leave unset to scan the whole project.
+  LOOKBACK_HOURS           How far back to scan for new User Stories. Default: 26.
+                           Never goes earlier than the start of the current month.
   ASSESSMENT_WORK_ITEM_TYPE  Default: "Secure by Design Assessment"
-  ASSESSMENT_TAG          Default: "SbD"
-  ASSESSMENT_TITLE_PREFIX Default: "SbD_"
-  DEFAULT_ASSIGNEE        If set, overrides "copy the story's assignee" behavior.
+  ASSESSMENT_TAG           Default: "SbD"
+  ASSESSMENT_TITLE_PREFIX  Default: "SbD_"
+  DEFAULT_ASSIGNEE         If set, overrides "copy the story's assignee" behavior.
 """
 
 import logging
@@ -48,6 +66,9 @@ ADO_PROJECT = os.environ.get("ADO_PROJECT", "")
 ADO_PAT = os.environ.get("ADO_PAT", "")
 ADO_AREA_PATH = os.environ.get("ADO_AREA_PATH", "").strip()
 
+DRY_RUN = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
+DRY_RUN_SHOW_TITLES = os.environ.get("DRY_RUN_SHOW_TITLES", "false").strip().lower() == "true"
+
 LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "26"))
 ASSESSMENT_WORK_ITEM_TYPE = os.environ.get(
     "ASSESSMENT_WORK_ITEM_TYPE", "Secure by Design Assessment"
@@ -60,7 +81,8 @@ API_VERSION = "7.1"
 REQUEST_TIMEOUT_SECS = 30
 
 # ---------------------------------------------------------------------------
-# Logging — IDs and status codes only, never story content
+# Logging — IDs and status codes only, never story content (unless the user
+# has explicitly opted into DRY_RUN_SHOW_TITLES for manual verification)
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -94,15 +116,25 @@ def ado_session() -> requests.Session:
     return session
 
 
+def current_month_start_utc() -> datetime:
+    now = datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 # ---------------------------------------------------------------------------
 # Step 1: find recently created User Stories
 # ---------------------------------------------------------------------------
 
 def get_recent_user_stories(session: requests.Session) -> list[int]:
-    """Returns a list of work item IDs for User Stories created in the lookback window."""
-    since = (datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    """Returns a list of work item IDs for User Stories created since
+    max(start-of-current-month, now - LOOKBACK_HOURS). The month boundary is
+    a hard floor: even a very large LOOKBACK_HOURS can never reach back into
+    a previous month."""
+    now = datetime.now(timezone.utc)
+    lookback_floor = now - timedelta(hours=LOOKBACK_HOURS)
+    month_floor = current_month_start_utc()
+    since = max(lookback_floor, month_floor)
+    since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     area_clause = ""
     if ADO_AREA_PATH:
@@ -115,11 +147,22 @@ def get_recent_user_stories(session: requests.Session) -> list[int]:
             FROM WorkItems
             WHERE [System.TeamProject] = '{ADO_PROJECT}'
             AND [System.WorkItemType] = 'User Story'
-            AND [System.CreatedDate] >= '{since}'
+            AND [System.CreatedDate] >= '{since_str}'
             {area_clause}
             ORDER BY [System.CreatedDate] ASC
         """
     }
+
+    log.info(
+        "Scope for this run: project=%s area_path=%s since=%s "
+        "(month_floor=%s lookback_floor=%s) dry_run=%s",
+        ADO_PROJECT,
+        ADO_AREA_PATH or "(entire project)",
+        since_str,
+        month_floor.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        lookback_floor.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        DRY_RUN,
+    )
 
     url = f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/wiql?api-version={API_VERSION}"
     resp = session.post(url, json=wiql, timeout=REQUEST_TIMEOUT_SECS)
@@ -128,7 +171,7 @@ def get_recent_user_stories(session: requests.Session) -> list[int]:
 
     work_items = resp.json().get("workItems", [])
     ids = [wi["id"] for wi in work_items]
-    log.info("Found %d User Story candidate(s) in lookback window", len(ids))
+    log.info("Found %d User Story candidate(s) in scope", len(ids))
     return ids
 
 
@@ -211,6 +254,25 @@ def create_assessment_ticket(session: requests.Session, story: dict) -> int:
         "uniqueName", ""
     )
 
+    if DRY_RUN:
+        # No write call at all in dry-run mode. Title is only logged if the
+        # user has explicitly opted in via DRY_RUN_SHOW_TITLES.
+        if DRY_RUN_SHOW_TITLES:
+            log.info(
+                "[DRY-RUN] would create '%s%s' for story %s (assignee=%s)",
+                ASSESSMENT_TITLE_PREFIX,
+                story_title,
+                story_id,
+                assignee or "(unset)",
+            )
+        else:
+            log.info(
+                "[DRY-RUN] would create assessment ticket for story %s (assignee=%s)",
+                story_id,
+                assignee or "(unset)",
+            )
+        return -1  # sentinel: no real ticket created
+
     patch_doc = [
         {
             "op": "add",
@@ -267,6 +329,12 @@ def main():
     fail_fast_on_missing_config()
     session = ado_session()
 
+    if DRY_RUN:
+        log.info(
+            "DRY_RUN is ON — no tickets will be created or modified in Azure DevOps. "
+            "Set DRY_RUN=false to let this run create real tickets."
+        )
+
     story_ids = get_recent_user_stories(session)
     created_count = 0
     skipped_count = 0
@@ -289,8 +357,11 @@ def main():
             log.error("Unexpected error processing story %s", story_id)
             error_count += 1
 
+    verb = "would create" if DRY_RUN else "created"
     log.info(
-        "Run complete. created=%d skipped=%d errors=%d scanned=%d",
+        "Run complete (dry_run=%s). %s=%d skipped=%d errors=%d scanned=%d",
+        DRY_RUN,
+        verb,
         created_count,
         skipped_count,
         error_count,
