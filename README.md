@@ -1,31 +1,33 @@
 # Secure by Design Assessment Automation
 
 Automatically creates a linked "Secure by Design Assessment" work item in
-Azure DevOps for every new User Story, so nobody has to do it by hand.
+Azure DevOps for every User Story in a given iteration, so nobody has to do
+it by hand.
 
 ## Built-in safety behavior
-
-Two things keep this from making a mess on the client board before you're
-ready:
 
 1. **Dry run by default.** `DRY_RUN` defaults to `true`. In dry-run mode the
    script does a real read-only scan of Azure DevOps and logs exactly what
    it *would* create (story IDs, assignee, would-create vs. would-skip) —
    but makes zero write calls. Nothing gets created in ADO until you
    explicitly set `DRY_RUN=false`.
-2. **Current-month floor.** The scan window never reaches earlier than the
-   first moment of the current calendar month (UTC), no matter what
-   `LOOKBACK_HOURS` is set to. This is a hard safety floor, not just a
-   lookback setting — a misconfigured lookback value can't accidentally pull
-   in stories from previous months.
+2. **Scoped by iteration, not a rolling time window.** There's no date-based
+   filtering at all. The script only acts on User Stories under
+   `ADO_ITERATION_PATH` (and, if set, `ADO_AREA_PATH`) — the same two fields
+   you'd fill in on a manual ADO query. This is required, not optional: the
+   script refuses to run without it, so it can never accidentally scan the
+   whole project's history.
 
 ## How it works
 
 1. A GitHub Actions workflow runs on a schedule (hourly by default).
-2. `create_assessment_tickets.py` queries Azure DevOps for User Stories
-   created since `max(start of current month, now - LOOKBACK_HOURS)`.
+2. `create_assessment_tickets.py` queries Azure DevOps for every User Story
+   under the configured Iteration Path (and Area Path, if set).
 3. For each story, it checks the story's **Related** links for an existing
    `Secure by Design Assessment` work item. If one exists, it's skipped.
+   This is what makes it safe to re-run against the same iteration over and
+   over as the month progresses — it only ever acts on stories that don't
+   have a ticket yet.
 4. If none exists **and** `DRY_RUN` is false, it creates one titled
    `SbD_<Story Title>`, tags it `SbD`, copies the assignee from the story
    (unless `DEFAULT_ASSIGNEE` is set), and links it back to the story with a
@@ -42,11 +44,12 @@ ready:
    (this is the `workflow_dispatch` trigger — it has a `dry_run` checkbox,
    ticked by default).
 3. Open the completed run's log. You'll see a scope summary line
-   (project, area path, date range, dry-run status) followed by one line per
-   story: either "already has an assessment ticket, skipping" or
+   (project, area path, iteration path, dry-run status) followed by one line
+   per story: either "already has an assessment ticket, skipping" or
    "[DRY-RUN] would create assessment ticket for story &lt;id&gt;".
 4. Cross-check a few of those story IDs in Azure DevOps yourself to confirm
-   they're in the right project/POD and really do need an assessment ticket.
+   they're in the right project/POD/iteration and really do need an
+   assessment ticket.
 5. If you want to see the *titles* the script would use (to sanity-check the
    `SbD_` naming) without creating anything, re-run manually with
    `DRY_RUN_SHOW_TITLES=true` set as an extra env var on that one run.
@@ -74,12 +77,23 @@ In Azure DevOps: **User settings → Personal access tokens → New Token**
 
 In the repo: **Settings → Secrets and variables → Actions → New repository secret**
 
-| Secret name    | Example value                          |
-|----------------|-----------------------------------------|
-| `ADO_ORG_URL`  | `https://dev.azure.com/nestle-it`       |
-| `ADO_PROJECT`  | `ADI`                                   |
-| `ADO_PAT`      | *(the token from step 1 — paste once, never logged)* |
-| `ADO_AREA_PATH`| `ADI\CDQ-iPAL_PowerApps` *(dry-run scope)* |
+| Secret name          | Example value                                          |
+|-----------------------|---------------------------------------------------------|
+| `ADO_ORG_URL`         | `https://dev.azure.com/nestle-it`                       |
+| `ADO_PROJECT`         | `ADI`                                                    |
+| `ADO_PAT`             | *(the token from step 1 — paste once, never logged)*    |
+| `ADO_ITERATION_PATH`  | `ADI\CDQ-iPAL_PowerApps\2026\Y26-Oct` *(required — this defines "this month")* |
+| `ADO_AREA_PATH`       | `ADI\CDQ-iPAL_PowerApps` *(optional — narrows further)* |
+
+`ADO_AREA_PATH` and `ADO_ITERATION_PATH` mirror the Area and Iteration
+fields you'd fill in on a manual ADO query (see your board's work item
+details pane for the exact values). **`ADO_ITERATION_PATH` is required** —
+the script fails fast with a clear error if it's missing, the same way it
+already does for a missing PAT.
+
+Each new month, update the `ADO_ITERATION_PATH` secret's value to that
+month's iteration (e.g. `...\2026\Y26-Nov` once November starts) — that one
+change is what moves the automation on to the next month's stories.
 
 ### 3. Confirm the schedule
 
@@ -104,11 +118,12 @@ cover the whole project.
 Two options, both supported by the same script:
 
 - **Shared repo, multiple workflows**: duplicate `automate_tickets.yml` per
-  POD (e.g. `automate_tickets_pod2.yml`), each with its own `ADO_AREA_PATH`
-  and, if needed, its own PAT secret with a different name. No code changes.
+  POD (e.g. `automate_tickets_pod2.yml`), each with its own
+  `ADO_AREA_PATH`/`ADO_ITERATION_PATH` and, if needed, its own PAT secret
+  with a different name. No code changes.
 - **Each POD forks/uses this repo**: since nothing here is POD-specific
-  beyond the secrets and optional area path, another team can plug into this
-  exact same script with only their own secrets configured.
+  beyond the secrets, another team can plug into this exact same script with
+  only their own secrets configured.
 
 ## Config reference (environment variables)
 
@@ -117,10 +132,10 @@ Two options, both supported by the same script:
 | `ADO_ORG_URL` | Yes | — | e.g. `https://dev.azure.com/nestle-it` |
 | `ADO_PROJECT` | Yes | — | e.g. `ADI` |
 | `ADO_PAT` | Yes | — | PAT with Work Items Read & Write scope |
+| `ADO_ITERATION_PATH` | Yes | — | Iteration Path defining the scan scope, e.g. this month's sprint |
 | `DRY_RUN` | No | `true` | Set to `false` to let the script actually create tickets |
 | `DRY_RUN_SHOW_TITLES` | No | `false` | Include would-be titles in dry-run logs for manual review |
-| `ADO_AREA_PATH` | No | *(whole project)* | Restrict scan to one Area Path |
-| `LOOKBACK_HOURS` | No | `26` | How far back to scan; never earlier than start of current month |
+| `ADO_AREA_PATH` | No | *(whole project)* | Narrow the scan to one Area Path within the iteration |
 | `ASSESSMENT_WORK_ITEM_TYPE` | No | `Secure by Design Assessment` | Custom work item type name |
 | `ASSESSMENT_TAG` | No | `SbD` | Tag applied to the new ticket |
 | `ASSESSMENT_TITLE_PREFIX` | No | `SbD_` | Prefix for the assessment title |
