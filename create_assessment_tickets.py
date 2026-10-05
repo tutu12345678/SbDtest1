@@ -458,134 +458,117 @@ def build_description(
     story_id: int,
     story_title: str,
 ) -> str:
-    return f"""
-    <table style="border-collapse: collapse; width: 100%;">
-        <thead>
-            <tr>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Security Service
-                </th>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Description
-                </th>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Prerequisites
-                </th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Security Requirements</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Define security controls early in SDLC
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Project scope, regulatory requirements, business objectives
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Threat Modeling</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Identify and prioritize potential threats
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Architecture/design documents, data flow diagrams
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Static Application Security Testing (SAST)</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Analyze source code for vulnerabilities before deployment
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Source code, build pipeline integration
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Dynamic Application Security Testing (DAST)</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Scan the running application for vulnerabilities
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    Running instance of application, test environment
-                </td>
-            </tr>
-        </tbody>
+    return """
+    <table style="border-collapse: collapse; width: 650px; table-layout: fixed;">
+        <tr>
+            <th style="width: 30%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Security Service
+            </th>
+            <th style="width: 30%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Description
+            </th>
+            <th style="width: 40%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Prerequisites
+            </th>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Security Requirements</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Define security controls early in SDLC
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Project scope, regulatory requirements, business objectives
+            </td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Threat Modeling</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Identify and prioritize potential threats
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Architecture/design documents, data flow diagrams
+            </td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Static Application Security Testing (SAST)</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Analyze source code for vulnerabilities before deployment
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Source code, build pipeline integration
+            </td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Dynamic Application Security Testing (DAST)</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Scan the running application for vulnerabilities
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                Running instance of application, test environment
+            </td>
+        </tr>
     </table>
 
     <br/>
 
-    <table style="border-collapse: collapse; width: 100%;">
-        <thead>
-            <tr>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Security Service
-                </th>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Scope
-                </th>
-                <th style="background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
-                    Status
-                </th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Security Requirements</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Threat Modeling</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Static Application Security Testing (SAST)</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    <b>Dynamic Application Security Testing (DAST)</b>
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-                <td style="border: 1px solid #cccccc; padding: 6px;">
-                    &nbsp;
-                </td>
-            </tr>
-        </tbody>
+    <table style="border-collapse: collapse; width: 650px; table-layout: fixed;">
+        <tr>
+            <th style="width: 50%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Security Service
+            </th>
+            <th style="width: 25%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Scope
+            </th>
+            <th style="width: 25%; background-color: #000000; color: #ffffff; border: 1px solid #cccccc; padding: 6px; text-align: left;">
+                Status
+            </th>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Security Requirements</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Threat Modeling</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Static Application Security Testing (SAST)</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+        </tr>
+
+        <tr>
+            <td style="border: 1px solid #cccccc; padding: 6px;">
+                <b>Dynamic Application Security Testing (DAST)</b>
+            </td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+            <td style="border: 1px solid #cccccc; padding: 6px;"></td>
+        </tr>
     </table>
     """
-
 # ---------------------------------------------------------------------------
 # Step 4:
 # Create the assessment ticket
