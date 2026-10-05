@@ -505,20 +505,8 @@ def create_assessment_ticket(
         "",
     )
 
-    assignee = (
-        DEFAULT_ASSIGNEE
-        or (
-            fields.get(
-                "System.AssignedTo",
-                {},
-            )
-            or {}
-        ).get(
-            "uniqueName",
-            "",
-        )
-    )
-
+    assignee = SBD_ASSIGNEE
+    
     # ---------------------------------------------------------------
     # Dry run
     # ---------------------------------------------------------------
