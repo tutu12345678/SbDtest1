@@ -3,57 +3,64 @@
 create_assessment_tickets.py
 
 Queries Azure DevOps (ADO) for User Stories and ensures every one of them has
-a linked "Secure by Design Assessment" work item. Creates the assessment
-ticket if it doesn't already exist, and links it back to the parent story
-with a "Related" link.
+a linked "Secure by Design Assessment" work item.
+
+Creates the assessment ticket if the story does not already have its OWN
+assessment ticket.
+
+Important duplicate-check behavior:
+    A User Story may have multiple "Related" work items, including SbD
+    assessment tickets belonging to OTHER User Stories.
+
+    Therefore, an existing assessment is considered a match ONLY when:
+        1. The related work item type is "Secure by Design Assessment", AND
+        2. Its title exactly matches:
+               <ASSESSMENT_TITLE_PREFIX><current story title>
+
+    Example:
+        User Story:
+            Implement login with MFA
+
+        Expected assessment:
+            SbD_Implement login with MFA
+
+    If the story is related to:
+        SbD_Add password reset
+
+    that assessment is ignored because it belongs to another story.
 
 Scoping:
-  - Scope is purely by Iteration Path (ADO_ITERATION_PATH, required) and,
-    optionally, Area Path — the same two fields you'd fill in on a manual
-    ADO query. There is no date-based filtering at all: every run scans
-    every User Story in that iteration, and the duplicate check in step 2
-    means stories that already have an assessment ticket are just skipped.
-    This makes the script safe to re-run repeatedly against the same
-    iteration (e.g. "ADI\\CDQ-iPAL_PowerApps\\2026\\Y26-Oct") as the month
-    progresses — it only ever creates tickets for stories that don't have
-    one yet.
+    - Scope is purely by Iteration Path (ADO_ITERATION_PATH, required) and,
+      optionally, Area Path.
+    - There is no date-based filtering.
+    - Every run scans every User Story in the configured iteration.
+    - The script is safe to run repeatedly against the same iteration.
 
 Safety behavior:
-  - DRY_RUN defaults to "true". In dry-run mode, the script logs exactly what
-    it WOULD do (story IDs and would-create/would-skip decisions) but makes
-    no write calls to Azure DevOps at all. You must explicitly set
-    DRY_RUN=false to let it actually create tickets.
-  - Every run logs a scope summary (project, area path, iteration path,
-    dry-run status) before touching anything, so you can see exactly what
-    it's about to act on.
+    - DRY_RUN defaults to "true".
+    - In dry-run mode, the script makes no write calls to Azure DevOps.
+    - Set DRY_RUN=false to actually create tickets.
 
 Security notes:
-  - The PAT is read from an environment variable only (GitHub Secret). It is
-    never printed, logged, or written to disk.
-  - Logging is restricted to work item IDs and HTTP status codes. Story
-    titles/descriptions are never written to logs, unless you explicitly opt
-    in with DRY_RUN_SHOW_TITLES=true for manual dry-run verification.
-  - All requests go over HTTPS to dev.azure.com (TLS 1.2+ is enforced by
-    Azure DevOps server-side).
+    - The PAT is read from an environment variable only.
+    - The PAT is never printed, logged, or written to disk.
+    - Logging is restricted to work item IDs and HTTP status codes unless
+      DRY_RUN_SHOW_TITLES=true is explicitly enabled.
 
 Required environment variables:
-  ADO_ORG_URL         e.g. https://dev.azure.com/nestle-it
-  ADO_PROJECT         e.g. ADI
-  ADO_PAT             Personal Access Token with "Work Items (Read & Write)" scope
-  ADO_ITERATION_PATH  e.g. ADI\\CDQ-iPAL_PowerApps\\2026\\Y26-Oct
-                       Update this each month to point at that month's iteration.
+    ADO_ORG_URL
+    ADO_PROJECT
+    ADO_PAT
+    ADO_ITERATION_PATH
 
-Optional environment variables (safe defaults shown):
-  DRY_RUN                 Default: "true". Set to "false" to actually create tickets.
-  DRY_RUN_SHOW_TITLES     Default: "false". If true, dry-run log lines include
-                           the would-be assessment title, for manual review.
-                           Leave false to keep logs title-free as originally required.
-  ADO_AREA_PATH            Restrict scan to a specific Area Path (e.g. "ADI\\CDQ-iPAL_PowerApps").
-                           Leave unset to scan the whole project (still scoped by iteration).
-  ASSESSMENT_WORK_ITEM_TYPE  Default: "Secure by Design Assessment"
-  ASSESSMENT_TAG           Default: "SbD"
-  ASSESSMENT_TITLE_PREFIX  Default: "SbD_"
-  DEFAULT_ASSIGNEE         If set, overrides "copy the story's assignee" behavior.
+Optional environment variables:
+    DRY_RUN
+    DRY_RUN_SHOW_TITLES
+    ADO_AREA_PATH
+    ASSESSMENT_WORK_ITEM_TYPE
+    ASSESSMENT_TAG
+    ASSESSMENT_TITLE_PREFIX
+    DEFAULT_ASSIGNEE
 """
 
 import logging
@@ -62,6 +69,7 @@ import sys
 
 import requests
 from requests.auth import HTTPBasicAuth
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -74,21 +82,37 @@ ADO_AREA_PATH = os.environ.get("ADO_AREA_PATH", "").strip()
 ADO_ITERATION_PATH = os.environ.get("ADO_ITERATION_PATH", "").strip()
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
-DRY_RUN_SHOW_TITLES = os.environ.get("DRY_RUN_SHOW_TITLES", "false").strip().lower() == "true"
+
+DRY_RUN_SHOW_TITLES = (
+    os.environ.get("DRY_RUN_SHOW_TITLES", "false").strip().lower() == "true"
+)
 
 ASSESSMENT_WORK_ITEM_TYPE = os.environ.get(
-    "ASSESSMENT_WORK_ITEM_TYPE", "Secure by Design Assessment"
+    "ASSESSMENT_WORK_ITEM_TYPE",
+    "Secure by Design Assessment",
 )
-ASSESSMENT_TAG = os.environ.get("ASSESSMENT_TAG", "SbD")
-ASSESSMENT_TITLE_PREFIX = os.environ.get("ASSESSMENT_TITLE_PREFIX", "SbD_")
-DEFAULT_ASSIGNEE = os.environ.get("DEFAULT_ASSIGNEE", "").strip()
+
+ASSESSMENT_TAG = os.environ.get(
+    "ASSESSMENT_TAG",
+    "SbD",
+)
+
+ASSESSMENT_TITLE_PREFIX = os.environ.get(
+    "ASSESSMENT_TITLE_PREFIX",
+    "SbD_",
+)
+
+DEFAULT_ASSIGNEE = os.environ.get(
+    "DEFAULT_ASSIGNEE",
+    "",
+).strip()
 
 API_VERSION = "7.1"
 REQUEST_TIMEOUT_SECS = 30
 
+
 # ---------------------------------------------------------------------------
-# Logging — IDs and status codes only, never story content (unless the user
-# has explicitly opted into DRY_RUN_SHOW_TITLES for manual verification)
+# Logging
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -96,8 +120,13 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     stream=sys.stdout,
 )
+
 log = logging.getLogger("sbd-automation")
 
+
+# ---------------------------------------------------------------------------
+# Configuration validation
+# ---------------------------------------------------------------------------
 
 def fail_fast_on_missing_config():
     missing = [
@@ -110,34 +139,59 @@ def fail_fast_on_missing_config():
         )
         if not val
     ]
+
     if missing:
-        log.error("Missing required environment variables: %s", ", ".join(missing))
+        log.error(
+            "Missing required environment variables: %s",
+            ", ".join(missing),
+        )
         sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# Azure DevOps session
+# ---------------------------------------------------------------------------
+
 def ado_session() -> requests.Session:
     session = requests.Session()
-    # ADO REST API uses Basic auth with an empty username and the PAT as password.
+
+    # Azure DevOps REST API uses Basic authentication with
+    # an empty username and the PAT as the password.
     session.auth = HTTPBasicAuth("", ADO_PAT)
-    session.headers.update({"Content-Type": "application/json"})
+
+    session.headers.update(
+        {
+            "Content-Type": "application/json",
+        }
+    )
+
     return session
 
 
 # ---------------------------------------------------------------------------
-# Step 1: find User Stories in the target iteration (month)
+# Step 1:
+# Find User Stories in the target iteration
 # ---------------------------------------------------------------------------
 
-def get_user_stories_in_iteration(session: requests.Session) -> list[int]:
-    """Returns every User Story under ADO_ITERATION_PATH (and, if set,
-    ADO_AREA_PATH). No date filtering at all — scope is purely "which
-    iteration/sprint", since that's how the team actually defines "this
-    month's work" rather than a raw creation timestamp. Re-running this for
-    the same iteration is safe: the duplicate check in step 2 means stories
-    that already have an assessment ticket are simply skipped."""
+def get_user_stories_in_iteration(
+    session: requests.Session,
+) -> list[int]:
+    """
+    Returns every User Story under ADO_ITERATION_PATH.
+
+    If ADO_AREA_PATH is configured, the query is additionally restricted
+    to that Area Path and its sub-areas.
+
+    There is no date filtering.
+    """
+
     area_clause = ""
+
     if ADO_AREA_PATH:
-        # WIQL uses UNDER for area path scoping so sub-areas are included too.
-        area_clause = f"AND [System.AreaPath] UNDER '{ADO_AREA_PATH}'\n"
+        # WIQL UNDER includes sub-areas.
+        area_clause = (
+            f"AND [System.AreaPath] UNDER '{ADO_AREA_PATH}'\n"
+        )
 
     wiql = {
         "query": f"""
@@ -152,132 +206,370 @@ def get_user_stories_in_iteration(session: requests.Session) -> list[int]:
     }
 
     log.info(
-        "Scope for this run: project=%s area_path=%s iteration_path=%s dry_run=%s",
+        "Scope for this run: project=%s area_path=%s "
+        "iteration_path=%s dry_run=%s",
         ADO_PROJECT,
         ADO_AREA_PATH or "(entire project)",
         ADO_ITERATION_PATH,
         DRY_RUN,
     )
 
-    url = f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/wiql?api-version={API_VERSION}"
-    resp = session.post(url, json=wiql, timeout=REQUEST_TIMEOUT_SECS)
-    log.info("WIQL query for User Stories in iteration -> status %s", resp.status_code)
+    url = (
+        f"{ADO_ORG_URL}/{ADO_PROJECT}"
+        f"/_apis/wit/wiql?api-version={API_VERSION}"
+    )
+
+    resp = session.post(
+        url,
+        json=wiql,
+        timeout=REQUEST_TIMEOUT_SECS,
+    )
+
+    log.info(
+        "WIQL query for User Stories in iteration -> status %s",
+        resp.status_code,
+    )
+
     resp.raise_for_status()
 
     work_items = resp.json().get("workItems", [])
-    ids = [wi["id"] for wi in work_items]
-    log.info("Found %d User Story candidate(s) in scope", len(ids))
+
+    ids = [
+        wi["id"]
+        for wi in work_items
+    ]
+
+    log.info(
+        "Found %d User Story candidate(s) in scope",
+        len(ids),
+    )
+
     return ids
 
 
 # ---------------------------------------------------------------------------
-# Step 2: check whether a story already has a linked SbD assessment
+# Step 2:
+# Get a User Story including its Related work items
 # ---------------------------------------------------------------------------
 
-def get_work_item_with_relations(session: requests.Session, story_id: int) -> dict:
+def get_work_item_with_relations(
+    session: requests.Session,
+    story_id: int,
+) -> dict:
+    """
+    Fetches the User Story including its relations.
+    """
+
     url = (
-        f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/workitems/{story_id}"
+        f"{ADO_ORG_URL}/{ADO_PROJECT}"
+        f"/_apis/wit/workitems/{story_id}"
         f"?$expand=relations&api-version={API_VERSION}"
     )
-    resp = session.get(url, timeout=REQUEST_TIMEOUT_SECS)
-    log.info("Fetch story %s with relations -> status %s", story_id, resp.status_code)
+
+    resp = session.get(
+        url,
+        timeout=REQUEST_TIMEOUT_SECS,
+    )
+
+    log.info(
+        "Fetch story %s with relations -> status %s",
+        story_id,
+        resp.status_code,
+    )
+
     resp.raise_for_status()
+
     return resp.json()
 
 
-def has_existing_assessment(session: requests.Session, story: dict) -> bool:
-    """Follows 'Related' links off the story and checks if any linked item is
-    already an assessment ticket (by work item type). Avoids relying on title
-    matching alone, since titles could be edited later."""
+# ---------------------------------------------------------------------------
+# Step 2A:
+# Check whether the story already has ITS OWN SbD assessment
+# ---------------------------------------------------------------------------
+
+def has_existing_assessment(
+    session: requests.Session,
+    story: dict,
+) -> bool:
+    """
+    Checks whether the current User Story has its own Secure by Design
+    Assessment.
+
+    IMPORTANT:
+
+    We cannot simply check whether ANY related item is a
+    "Secure by Design Assessment".
+
+    A User Story may be related to an assessment belonging to another
+    User Story.
+
+    Therefore, an existing assessment is considered a match only when:
+
+        Work Item Type == ASSESSMENT_WORK_ITEM_TYPE
+
+    AND
+
+        Work Item Title ==
+        ASSESSMENT_TITLE_PREFIX + current User Story title
+
+    Example:
+
+        Current story:
+            Implement login with MFA
+
+        Expected assessment:
+            SbD_Implement login with MFA
+
+        Related assessment:
+            SbD_Add password reset
+
+        Result:
+            NOT a match -> create assessment for current story.
+    """
+
     relations = story.get("relations", [])
+
     related_ids = []
+
+    # ---------------------------------------------------------------
+    # Extract only "Related" work item IDs
+    # ---------------------------------------------------------------
+
     for rel in relations:
-        # System.LinkTypes.Related is the relation name for "Related" links.
-        if rel.get("rel") == "System.LinkTypes.Related":
-            url = rel.get("url", "")
-            if "/workItems/" in url:
-                try:
-                    related_ids.append(int(url.rsplit("/", 1)[-1]))
-                except ValueError:
-                    continue
+
+        if rel.get("rel") != "System.LinkTypes.Related":
+            continue
+
+        url = rel.get("url", "")
+
+        if "/workItems/" not in url:
+            continue
+
+        try:
+            related_id = int(
+                url.rsplit("/", 1)[-1]
+            )
+
+            related_ids.append(related_id)
+
+        except ValueError:
+            continue
 
     if not related_ids:
         return False
 
-    ids_param = ",".join(str(i) for i in related_ids)
-    url = (
-        f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/workitems"
-        f"?ids={ids_param}&fields=System.WorkItemType&api-version={API_VERSION}"
+    # ---------------------------------------------------------------
+    # Get current story title
+    # ---------------------------------------------------------------
+
+    story_fields = story.get("fields", {})
+
+    story_title = story_fields.get(
+        "System.Title",
+        "",
     )
-    resp = session.get(url, timeout=REQUEST_TIMEOUT_SECS)
+
+    expected_assessment_title = (
+        f"{ASSESSMENT_TITLE_PREFIX}{story_title}"
+    )
+
+    # ---------------------------------------------------------------
+    # Fetch type + title for all related items
+    # ---------------------------------------------------------------
+
+    ids_param = ",".join(
+        str(item_id)
+        for item_id in related_ids
+    )
+
+    url = (
+        f"{ADO_ORG_URL}/{ADO_PROJECT}"
+        f"/_apis/wit/workitems"
+        f"?ids={ids_param}"
+        f"&fields=System.WorkItemType,System.Title"
+        f"&api-version={API_VERSION}"
+    )
+
+    resp = session.get(
+        url,
+        timeout=REQUEST_TIMEOUT_SECS,
+    )
+
     log.info(
         "Check related items %s for story %s -> status %s",
         ids_param,
         story.get("id"),
         resp.status_code,
     )
+
     resp.raise_for_status()
 
+    # ---------------------------------------------------------------
+    # Check each related work item
+    # ---------------------------------------------------------------
+
     for item in resp.json().get("value", []):
-        if item.get("fields", {}).get("System.WorkItemType") == ASSESSMENT_WORK_ITEM_TYPE:
+
+        fields = item.get(
+            "fields",
+            {},
+        )
+
+        work_item_type = fields.get(
+            "System.WorkItemType",
+            "",
+        )
+
+        work_item_title = fields.get(
+            "System.Title",
+            "",
+        )
+
+        # First check that it is an SbD assessment.
+        if work_item_type != ASSESSMENT_WORK_ITEM_TYPE:
+            continue
+
+        # Then check that it belongs to THIS story.
+        if work_item_title == expected_assessment_title:
+
+            log.info(
+                "Story %s already has its own assessment ticket %s",
+                story.get("id"),
+                item.get("id"),
+            )
+
             return True
+
+        # This is an assessment, but it belongs to another story.
+        log.info(
+            "Related assessment %s for story %s does not match "
+            "the expected assessment title; continuing",
+            item.get("id"),
+            story.get("id"),
+        )
+
+    # No matching assessment was found.
     return False
 
 
 # ---------------------------------------------------------------------------
-# Step 3: create the assessment ticket and link it back
+# Step 3:
+# Build assessment description
 # ---------------------------------------------------------------------------
 
-def build_description(story_id: int, story_title: str) -> str:
+def build_description(
+    story_id: int,
+    story_title: str,
+) -> str:
+    """
+    Builds the HTML description for the assessment ticket.
+    """
+
     return (
         f"<div>Auto-generated Secure by Design Assessment for User Story "
-        f"<a href=\"{ADO_ORG_URL}/{ADO_PROJECT}/_workitems/edit/{story_id}\">#{story_id}</a>: "
+        f"<a href=\"{ADO_ORG_URL}/{ADO_PROJECT}"
+        f"/_workitems/edit/{story_id}\">#{story_id}</a>: "
         f"{story_title}.</div>"
+
         f"<div><br/></div>"
+
         f"<div><b>Reviewer notes:</b></div>"
+
         f"<div>- Threat model reviewed: </div>"
         f"<div>- Data classification: </div>"
         f"<div>- Findings / follow-ups: </div>"
     )
 
 
-def create_assessment_ticket(session: requests.Session, story: dict) -> int:
-    fields = story.get("fields", {})
-    story_id = story["id"]
-    story_title = fields.get("System.Title", "")
-    assignee = DEFAULT_ASSIGNEE or (fields.get("System.AssignedTo", {}) or {}).get(
-        "uniqueName", ""
+# ---------------------------------------------------------------------------
+# Step 4:
+# Create the assessment ticket
+# ---------------------------------------------------------------------------
+
+def create_assessment_ticket(
+    session: requests.Session,
+    story: dict,
+) -> int:
+    """
+    Creates the Secure by Design Assessment and links it back to
+    the User Story using a Related link.
+    """
+
+    fields = story.get(
+        "fields",
+        {},
     )
 
+    story_id = story["id"]
+
+    story_title = fields.get(
+        "System.Title",
+        "",
+    )
+
+    assignee = (
+        DEFAULT_ASSIGNEE
+        or (
+            fields.get(
+                "System.AssignedTo",
+                {},
+            )
+            or {}
+        ).get(
+            "uniqueName",
+            "",
+        )
+    )
+
+    # ---------------------------------------------------------------
+    # Dry run
+    # ---------------------------------------------------------------
+
     if DRY_RUN:
-        # No write call at all in dry-run mode. Title is only logged if the
-        # user has explicitly opted in via DRY_RUN_SHOW_TITLES.
+
         if DRY_RUN_SHOW_TITLES:
+
             log.info(
-                "[DRY-RUN] would create '%s%s' for story %s (assignee=%s)",
+                "[DRY-RUN] would create '%s%s' for story %s "
+                "(assignee=%s)",
                 ASSESSMENT_TITLE_PREFIX,
                 story_title,
                 story_id,
                 assignee or "(unset)",
             )
+
         else:
+
             log.info(
-                "[DRY-RUN] would create assessment ticket for story %s (assignee=%s)",
+                "[DRY-RUN] would create assessment ticket for story %s "
+                "(assignee=%s)",
                 story_id,
                 assignee or "(unset)",
             )
-        return -1  # sentinel: no real ticket created
+
+        # No real ticket created.
+        return -1
+
+    # ---------------------------------------------------------------
+    # Build Azure DevOps JSON Patch document
+    # ---------------------------------------------------------------
 
     patch_doc = [
         {
             "op": "add",
             "path": "/fields/System.Title",
-            "value": f"{ASSESSMENT_TITLE_PREFIX}{story_title}",
+            "value": (
+                f"{ASSESSMENT_TITLE_PREFIX}"
+                f"{story_title}"
+            ),
         },
         {
             "op": "add",
             "path": "/fields/System.Description",
-            "value": build_description(story_id, story_title),
+            "value": build_description(
+                story_id,
+                story_title,
+            ),
         },
         {
             "op": "add",
@@ -289,30 +581,73 @@ def create_assessment_ticket(session: requests.Session, story: dict) -> int:
             "path": "/relations/-",
             "value": {
                 "rel": "System.LinkTypes.Related",
-                "url": f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/workItems/{story_id}",
+                "url": (
+                    f"{ADO_ORG_URL}/{ADO_PROJECT}"
+                    f"/_apis/wit/workItems/{story_id}"
+                ),
             },
         },
     ]
+
+    # ---------------------------------------------------------------
+    # Optional assignee
+    # ---------------------------------------------------------------
+
     if assignee:
+
         patch_doc.append(
-            {"op": "add", "path": "/fields/System.AssignedTo", "value": assignee}
+            {
+                "op": "add",
+                "path": "/fields/System.AssignedTo",
+                "value": assignee,
+            }
         )
 
-    work_item_type_encoded = ASSESSMENT_WORK_ITEM_TYPE.replace(" ", "%20")
+    # ---------------------------------------------------------------
+    # Create work item
+    # ---------------------------------------------------------------
+
+    work_item_type_encoded = (
+        ASSESSMENT_WORK_ITEM_TYPE.replace(
+            " ",
+            "%20",
+        )
+    )
+
     url = (
-        f"{ADO_ORG_URL}/{ADO_PROJECT}/_apis/wit/workitems/${work_item_type_encoded}"
+        f"{ADO_ORG_URL}/{ADO_PROJECT}"
+        f"/_apis/wit/workitems/"
+        f"${work_item_type_encoded}"
         f"?api-version={API_VERSION}"
     )
-    headers = {"Content-Type": "application/json-patch+json"}
+
+    headers = {
+        "Content-Type": "application/json-patch+json",
+    }
+
     resp = session.post(
-        url, json=patch_doc, headers=headers, timeout=REQUEST_TIMEOUT_SECS
+        url,
+        json=patch_doc,
+        headers=headers,
+        timeout=REQUEST_TIMEOUT_SECS,
     )
+
     log.info(
-        "Create assessment ticket for story %s -> status %s", story_id, resp.status_code
+        "Create assessment ticket for story %s -> status %s",
+        story_id,
+        resp.status_code,
     )
+
     resp.raise_for_status()
+
     new_id = resp.json()["id"]
-    log.info("Created assessment ticket %s linked to story %s", new_id, story_id)
+
+    log.info(
+        "Created assessment ticket %s linked to story %s",
+        new_id,
+        story_id,
+    )
+
     return new_id
 
 
@@ -321,40 +656,115 @@ def create_assessment_ticket(session: requests.Session, story: dict) -> int:
 # ---------------------------------------------------------------------------
 
 def main():
+
+    # ---------------------------------------------------------------
+    # Validate configuration
+    # ---------------------------------------------------------------
+
     fail_fast_on_missing_config()
+
     session = ado_session()
 
+    # ---------------------------------------------------------------
+    # Dry-run notification
+    # ---------------------------------------------------------------
+
     if DRY_RUN:
+
         log.info(
-            "DRY_RUN is ON — no tickets will be created or modified in Azure DevOps. "
-            "Set DRY_RUN=false to let this run create real tickets."
+            "DRY_RUN is ON — no tickets will be created or modified "
+            "in Azure DevOps. Set DRY_RUN=false to let this run "
+            "create real tickets."
         )
 
-    story_ids = get_user_stories_in_iteration(session)
+    # ---------------------------------------------------------------
+    # Get User Stories
+    # ---------------------------------------------------------------
+
+    story_ids = get_user_stories_in_iteration(
+        session
+    )
+
     created_count = 0
     skipped_count = 0
     error_count = 0
 
+    # ---------------------------------------------------------------
+    # Process every User Story
+    # ---------------------------------------------------------------
+
     for story_id in story_ids:
+
         try:
-            story = get_work_item_with_relations(session, story_id)
-            if has_existing_assessment(session, story):
-                log.info("Story %s already has an assessment ticket, skipping", story_id)
+
+            # Fetch story + Related work items.
+            story = get_work_item_with_relations(
+                session,
+                story_id,
+            )
+
+            # Check whether THIS story has its OWN assessment.
+            if has_existing_assessment(
+                session,
+                story,
+            ):
+
+                log.info(
+                    "Story %s already has its own assessment ticket, "
+                    "skipping",
+                    story_id,
+                )
+
                 skipped_count += 1
+
                 continue
-            create_assessment_ticket(session, story)
+
+            # No matching assessment found.
+            create_assessment_ticket(
+                session,
+                story,
+            )
+
             created_count += 1
+
         except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "unknown"
-            log.error("HTTP error processing story %s -> status %s", story_id, status)
-            error_count += 1
-        except Exception:
-            log.error("Unexpected error processing story %s", story_id)
+
+            status = (
+                exc.response.status_code
+                if exc.response is not None
+                else "unknown"
+            )
+
+            log.error(
+                "HTTP error processing story %s -> status %s",
+                story_id,
+                status,
+            )
+
             error_count += 1
 
-    verb = "would create" if DRY_RUN else "created"
+        except Exception:
+
+            log.error(
+                "Unexpected error processing story %s",
+                story_id,
+            )
+
+            error_count += 1
+
+    # ---------------------------------------------------------------
+    # Run summary
+    # ---------------------------------------------------------------
+
+    verb = (
+        "would create"
+        if DRY_RUN
+        else "created"
+    )
+
     log.info(
-        "Run complete (dry_run=%s). %s=%d skipped=%d errors=%d scanned=%d",
+        "Run complete (dry_run=%s). %s=%d skipped=%d "
+        "errors=%d scanned=%d",
         DRY_RUN,
         verb,
         created_count,
@@ -363,9 +773,17 @@ def main():
         len(story_ids),
     )
 
+    # ---------------------------------------------------------------
+    # Fail GitHub Actions job if any story encountered an error
+    # ---------------------------------------------------------------
+
     if error_count > 0:
         sys.exit(1)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()
