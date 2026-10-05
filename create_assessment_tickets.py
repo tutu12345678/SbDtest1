@@ -60,7 +60,6 @@ Optional environment variables:
     ASSESSMENT_WORK_ITEM_TYPE
     ASSESSMENT_TAG
     ASSESSMENT_TITLE_PREFIX
-    DEFAULT_ASSIGNEE
 """
 
 import logging
