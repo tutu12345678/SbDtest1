@@ -102,10 +102,8 @@ ASSESSMENT_TITLE_PREFIX = os.environ.get(
     "SbD_",
 )
 
-DEFAULT_ASSIGNEE = os.environ.get(
-    "DEFAULT_ASSIGNEE",
-    "",
-).strip()
+# ADO account that should receive all Secure by Design Assessment tickets
+SBD_ASSIGNEE = "Dhruv.Jain@nestle.com"
 
 API_VERSION = "7.1"
 REQUEST_TIMEOUT_SECS = 30
