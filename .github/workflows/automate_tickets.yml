@@ -5,7 +5,13 @@ name: Secure by Design Assessment Automation
 on:
   schedule:
     - cron: "0 * * * *"
-  workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (log only, no tickets created)"
+        required: true
+        type: boolean
+        default: true
 
 # Least-privilege token permissions for this workflow.
 permissions:
@@ -36,4 +42,9 @@ jobs:
           # Scoped to one POD for the dry run. Remove this line later if/when
           # you want the automation to cover the whole project.
           ADO_AREA_PATH: ${{ secrets.ADO_AREA_PATH }}
+          # Manual runs (Actions tab -> Run workflow) use the checkbox above,
+          # defaulting to true. Scheduled hourly runs always use the "true"
+          # fallback here too, so the schedule stays a no-op dry run until
+          # you deliberately flip this line to "false".
+          DRY_RUN: ${{ inputs.dry_run != false }}
         run: python create_assessment_tickets.py
