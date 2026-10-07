@@ -803,8 +803,8 @@ def main():
                     story_id,
                     state,
                 )
-    skipped_count += 1
-    continue
+                skipped_count += 1
+                continue
 
     
             # Check whether THIS story has its OWN assessment.
