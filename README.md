@@ -20,7 +20,7 @@ it by hand.
 
 ## How it works
 
-1. A GitHub Actions workflow runs on a schedule (hourly by default).
+1. A GitHub Actions workflow runs on a schedule (not started by default).
 2. `create_assessment_tickets.py` queries Azure DevOps for every User Story
    under the configured Iteration Path (and Area Path, if set).
 3. For each story, it checks the story's **Related** links for an existing
@@ -97,8 +97,8 @@ change is what moves the automation on to the next month's stories.
 
 ### 3. Confirm the schedule
 
-The workflow runs hourly (`0 * * * *`). To switch to once a day, edit the
-`cron` line — e.g. `0 6 * * *` runs once daily at 06:00 UTC.
+The workflow runs hourly (`0 * * * *`). To switch to once a day, at 9:00 am IST edit the
+`cron` line —"30 3 * * 1-5" runs once daily 
 
 ## Turning it on for real
 
