@@ -23,15 +23,24 @@ it by hand.
 1. A GitHub Actions workflow runs on a schedule (not started by default).
 2. `create_assessment_tickets.py` queries Azure DevOps for every User Story
    under the configured Iteration Path (and Area Path, if set).
-3. For each story, it checks the story's **Related** links for an existing
-   `Secure by Design Assessment` work item. If one exists, it's skipped.
-   This is what makes it safe to re-run against the same iteration over and
-   over as the month progresses — it only ever acts on stories that don't
-   have a ticket yet.
-4. If none exists **and** `DRY_RUN` is false, it creates one titled
-   `SbD_<Story Title>`, tags it `SbD`, copies the assignee from the story
-   (unless `DEFAULT_ASSIGNEE` is set), and links it back to the story with a
-   **Related** link. If `DRY_RUN` is true, it just logs the decision.
+3. For each story, it checks the story's **Related** links for its own
+   `Secure by Design Assessment`. A match is found only when the related work
+   item is a `Secure by Design Assessment` and its title exactly matches
+   `SbD_<Story Title>`. Assessments belonging to other User Stories are ignored.
+4. Stories in **New** or **Removed** state are skipped and no SbD ticket is
+   created for them. For all other states, if no matching SbD ticket exists
+   and `DRY_RUN` is false, the script creates one titled
+   `SbD_<Story Title>`.
+
+   The new ticket:
+   - is assigned to `Dhruv.Jain@nestle.com`
+   - is tagged `SbD`
+   - uses the configured `ADO_AREA_PATH`
+   - uses the configured `ADO_ITERATION_PATH`
+   - is linked back to the User Story with a **Related** link
+   - contains the standard Secure by Design tables in the Description field
+
+   If `DRY_RUN` is true, it only logs what it would create.
 5. Only work item IDs and HTTP status codes are logged — never story titles
    or descriptions, unless you explicitly opt into
    `DRY_RUN_SHOW_TITLES=true` for manual review during a dry run.
@@ -98,7 +107,7 @@ change is what moves the automation on to the next month's stories.
 ### 3. Confirm the schedule
 
 The workflow runs hourly (`0 * * * *`). To switch to once a day, at 9:00 am IST edit the
-`cron` line —"30 3 * * 1-5" runs once daily 
+`cron` line —"30 3 * * 1-5", (1-5 means monday to driday) 
 
 ## Turning it on for real
 
@@ -139,4 +148,4 @@ Two options, both supported by the same script:
 | `ASSESSMENT_WORK_ITEM_TYPE` | No | `Secure by Design Assessment` | Custom work item type name |
 | `ASSESSMENT_TAG` | No | `SbD` | Tag applied to the new ticket |
 | `ASSESSMENT_TITLE_PREFIX` | No | `SbD_` | Prefix for the assessment title |
-| `DEFAULT_ASSIGNEE` | No | *(copies story's assignee)* | Fixed assignee/queue override |
+| `SBD_ASSIGNEE` | No | `Dhruv.Jain@nestle.com` | Assignee for all newly created SbD tickets |
