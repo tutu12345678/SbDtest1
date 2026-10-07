@@ -789,6 +789,24 @@ def main():
                 story_id,
             )
 
+            # Skip stories that are not ready for an SbD assessment.
+            state = (
+                story.get("fields", {})
+                .get("System.State", "")
+                .strip()
+                .lower()
+            )
+
+            if state in ("new", "removed"):
+                log.info(
+                    "Story %s is in '%s' state, skipping SbD assessment creation",
+                    story_id,
+                    state,
+                )
+    skipped_count += 1
+    continue
+
+    
             # Check whether THIS story has its OWN assessment.
             if has_existing_assessment(
                 session,
